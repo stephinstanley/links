@@ -218,8 +218,58 @@ class LinksDataProvider {
     }
 
     try {
-      // Delete the tag directly by ID
-      await _firestore.collection('tags').doc(tagId).delete();
+      final tagRef = _firestore.collection('tags').doc(tagId);
+      final tagDoc = await tagRef.get();
+
+      if (!tagDoc.exists) {
+        throw Exception('Tag not found');
+      }
+
+      final tagData = tagDoc.data();
+      if (tagData == null) {
+        throw Exception('Invalid tag data');
+      }
+
+      final tagOwner = (tagData['userId'] as String? ?? '').trim();
+      if (tagOwner != userId) {
+        throw Exception('You are not allowed to delete this tag');
+      }
+
+      final tagName = (tagData['tagName'] as String? ?? '').trim();
+      if (tagName.isEmpty) {
+        throw Exception('Invalid tag name');
+      }
+      if (tagName.toUpperCase() == 'DEFAULT') {
+        throw Exception('Default tag cannot be deleted');
+      }
+
+      // Move links using this tag to DEFAULT before deleting the tag.
+      final linksUsingTag = await _firestore
+          .collection('links')
+          .where('userId', isEqualTo: userId)
+          .where('tag', isEqualTo: tagName)
+          .get();
+
+      if (linksUsingTag.docs.isNotEmpty) {
+        const batchSize = 400;
+        for (var i = 0; i < linksUsingTag.docs.length; i += batchSize) {
+          final batch = _firestore.batch();
+          final end = (i + batchSize < linksUsingTag.docs.length)
+              ? i + batchSize
+              : linksUsingTag.docs.length;
+
+          for (final doc in linksUsingTag.docs.sublist(i, end)) {
+            batch.update(doc.reference, {
+              'tag': 'DEFAULT',
+              'updatedAt': Timestamp.now(),
+            });
+          }
+
+          await batch.commit();
+        }
+      }
+
+      await tagRef.delete();
 
       log('DataProvider: Tag deleted successfully');
     } catch (e, st) {

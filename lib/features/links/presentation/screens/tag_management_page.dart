@@ -12,8 +12,10 @@ import 'package:links/features/links/presentation/bloc/edit_tag/edit_tag_bloc.da
 import 'package:links/features/links/presentation/bloc/edit_tag/edit_tag_event.dart';
 import 'package:links/features/links/presentation/bloc/edit_tag/edit_tag_state.dart';
 import 'package:links/features/links/presentation/bloc/tags/tags_bloc.dart';
-import 'package:links/features/links/presentation/bloc/tags/tags_event.dart';
 import 'package:links/features/links/presentation/bloc/tags/tags_state.dart';
+import 'package:links/features/links/widgets/delete_confirmation_dialog.dart';
+import 'package:links/features/links/presentation/screens/tag_links_page.dart';
+import 'package:links/features/links/presentation/utils/tag_color_utils.dart';
 
 class TagManagementScreen extends StatefulWidget {
   const TagManagementScreen({super.key});
@@ -73,7 +75,6 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
                   if (state is AddTagSuccess) {
                     Navigator.pop(context);
                     _showSnack(state.message, backgroundColor: Colors.green);
-                    context.read<TagsBloc>().add(const TagsRefreshed());
                   } else if (state is AddTagError) {
                     _showSnack(state.message, backgroundColor: Colors.red);
                   }
@@ -146,7 +147,6 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
                   if (state is EditTagSuccess) {
                     Navigator.pop(context);
                     _showSnack(state.message, backgroundColor: Colors.green);
-                    context.read<TagsBloc>().add(const TagsRefreshed());
                   } else if (state is EditTagError) {
                     _showSnack(state.message, backgroundColor: Colors.red);
                   }
@@ -198,56 +198,30 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
       builder: (context) {
         return BlocProvider<DeleteTagBloc>.value(
           value: deleteTagBloc,
-          child: AlertDialog(
-            title: const Text('Delete Tag'),
-            content: Text(
-              'Are you sure you want to delete the tag "$tagName"?',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              BlocListener<DeleteTagBloc, DeleteTagState>(
-                listener: (context, state) {
-                  if (state is DeleteTagSuccess) {
-                    Navigator.pop(context);
-                    _showSnack(state.message, backgroundColor: Colors.green);
-                    context.read<TagsBloc>().add(const TagsRefreshed());
-                  } else if (state is DeleteTagError) {
-                    _showSnack(state.message, backgroundColor: Colors.red);
-                  }
-                },
-                child: BlocBuilder<DeleteTagBloc, DeleteTagState>(
-                  builder: (context, state) {
-                    return ElevatedButton(
-                      onPressed: state is DeleteTagLoading
-                          ? null
-                          : () {
-                              context.read<DeleteTagBloc>().add(
-                                DeleteTagRequested(tagId: tagId),
-                              );
-                            },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                      ),
-                      child: state is DeleteTagLoading
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
-                                ),
-                              ),
-                            )
-                          : const Text('Delete'),
+          child: BlocListener<DeleteTagBloc, DeleteTagState>(
+            listener: (context, state) {
+              if (state is DeleteTagSuccess) {
+                Navigator.pop(context);
+                _showSnack(state.message, backgroundColor: Colors.green);
+              } else if (state is DeleteTagError) {
+                _showSnack(state.message, backgroundColor: Colors.red);
+              }
+            },
+            child: BlocBuilder<DeleteTagBloc, DeleteTagState>(
+              builder: (context, state) {
+                return DeleteConfirmationDialog(
+                  title: 'Delete Tag',
+                  message:
+                      'Are you sure you want to delete the tag "$tagName"?',
+                  isLoading: state is DeleteTagLoading,
+                  onConfirm: () {
+                    context.read<DeleteTagBloc>().add(
+                      DeleteTagRequested(tagId: tagId),
                     );
                   },
-                ),
-              ),
-            ],
+                );
+              },
+            ),
           ),
         );
       },
@@ -305,9 +279,14 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
           }
 
           if (state is TagsSuccess) {
-            final tags = state.tags
-                .where((tag) => tag.tagName != 'DEFAULT')
-                .toList();
+            final tags = [...state.tags];
+            tags.sort((a, b) {
+              final aIsDefault = a.tagName.toUpperCase() == 'DEFAULT';
+              final bIsDefault = b.tagName.toUpperCase() == 'DEFAULT';
+              if (aIsDefault && !bIsDefault) return -1;
+              if (!aIsDefault && bIsDefault) return 1;
+              return a.tagName.compareTo(b.tagName);
+            });
 
             if (tags.isEmpty) {
               return Center(
@@ -339,51 +318,77 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
               padding: const EdgeInsets.all(12),
               itemBuilder: (context, index) {
                 final tag = tags[index];
+                final tagColor = TagColorUtils.colorForTag(tag.tagName);
+                final isDefaultTag = tag.tagName.toUpperCase() == 'DEFAULT';
                 return Card(
                   child: ListTile(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => TagLinksPage(tagName: tag.tagName),
+                        ),
+                      );
+                    },
                     leading: Icon(
                       Icons.label_rounded,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: tagColor,
                     ),
-                    title: Text(tag.tagName),
-                    trailing: PopupMenuButton<String>(
-                      onSelected: (value) {
-                        if (value == 'edit') {
-                          _showEditTagDialog(tag.id, tag.tagName);
-                        } else if (value == 'delete') {
-                          _showDeleteTagDialog(tag.id, tag.tagName);
-                        }
-                      },
-                      itemBuilder: (BuildContext context) => [
-                        const PopupMenuItem<String>(
-                          value: 'edit',
-                          child: Row(
-                            children: [
-                              Icon(Icons.edit_rounded, size: 18),
-                              SizedBox(width: 12),
-                              Text('Edit'),
+                    title: Text(
+                      tag.tagName,
+                      style: TextStyle(
+                        color: tagColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: Text(
+                      isDefaultTag
+                          ? 'System tag • cannot edit or delete'
+                          : 'Tap to view links',
+                    ),
+                    trailing: isDefaultTag
+                        ? Icon(
+                            Icons.lock_rounded,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          )
+                        : PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'edit') {
+                                _showEditTagDialog(tag.id, tag.tagName);
+                              } else if (value == 'delete') {
+                                _showDeleteTagDialog(tag.id, tag.tagName);
+                              }
+                            },
+                            itemBuilder: (BuildContext context) => [
+                              const PopupMenuItem<String>(
+                                value: 'edit',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.edit_rounded, size: 18),
+                                    SizedBox(width: 12),
+                                    Text('Edit'),
+                                  ],
+                                ),
+                              ),
+                              const PopupMenuItem<String>(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.delete_rounded,
+                                      size: 18,
+                                      color: Colors.red,
+                                    ),
+                                    SizedBox(width: 12),
+                                    Text(
+                                      'Delete',
+                                      style: TextStyle(color: Colors.red),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        const PopupMenuItem<String>(
-                          value: 'delete',
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.delete_rounded,
-                                size: 18,
-                                color: Colors.red,
-                              ),
-                              SizedBox(width: 12),
-                              Text(
-                                'Delete',
-                                style: TextStyle(color: Colors.red),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
                 );
               },

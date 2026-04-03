@@ -13,6 +13,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController passwordController = TextEditingController();
   bool isLogin = true;
   bool isLoading = false;
+  bool isPasswordVisible = false;
   String? errorMessage;
 
   Future<void> _submit() async {
@@ -68,10 +69,22 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 16),
               TextField(
                 controller: passwordController,
-                obscureText: true,
-                decoration: const InputDecoration(
+                obscureText: !isPasswordVisible,
+                decoration: InputDecoration(
                   labelText: 'Password',
-                  prefixIcon: Icon(Icons.lock_rounded),
+                  prefixIcon: const Icon(Icons.lock_rounded),
+                  suffixIcon: IconButton(
+                    onPressed: () {
+                      setState(() {
+                        isPasswordVisible = !isPasswordVisible;
+                      });
+                    },
+                    icon: Icon(
+                      isPasswordVisible
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 24),

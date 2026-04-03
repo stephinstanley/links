@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:links/features/links/models/link.dart';
 import 'package:links/features/links/presentation/bloc/add_link/add_link_bloc.dart';
 import 'package:links/features/links/presentation/bloc/add_link/add_link_event.dart';
 import 'package:links/features/links/presentation/bloc/add_link/add_link_state.dart';
@@ -11,7 +14,10 @@ import 'package:links/features/links/presentation/bloc/edit_link/edit_link_bloc.
 import 'package:links/features/links/presentation/bloc/edit_link/edit_link_event.dart';
 import 'package:links/features/links/presentation/bloc/edit_link/edit_link_state.dart';
 import 'package:links/features/links/widgets/empty_state.dart';
+import 'package:links/features/links/widgets/delete_confirmation_dialog.dart';
 import 'package:links/features/links/widgets/link_card.dart';
+import 'package:links/features/links/presentation/utils/tag_color_utils.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 // search and edit features removed for read-only mode
 // share/copy removed in read-only mode
 import 'package:url_launcher/url_launcher.dart';
@@ -40,6 +46,13 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
   TextEditingController _titleController = TextEditingController();
   TextEditingController _urlController = TextEditingController();
   TextEditingController _tagController = TextEditingController();
+  StreamSubscription<List<SharedMediaFile>>? _sharedMediaSubscription;
+  bool _isAddDialogOpen = false;
+  bool _isQuickSavePending = false;
+
+  Future<void> _refreshContent() async {
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+  }
 
   @override
   void initState() {
@@ -52,10 +65,12 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     context.read<TagsBloc>().add(const TagsFetched());
     debugPrint('LinkManagerPage: Adding LinksFetched event');
     context.read<LinksBloc>().add(const LinksFetched());
+    _setupShareHandling();
   }
 
   @override
   void dispose() {
+    _sharedMediaSubscription?.cancel();
     // no controllers to dispose in read-only mode
     _titleController.dispose();
     _urlController.dispose();
@@ -63,7 +78,216 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     super.dispose();
   }
 
-  void _showAddLinkDialog() {
+  Future<void> _setupShareHandling() async {
+    _sharedMediaSubscription = ReceiveSharingIntent.instance
+        .getMediaStream()
+        .listen(
+          _handleSharedMedia,
+          onError: (Object error) {
+            debugPrint('LinkManagerPage: share stream error: $error');
+          },
+        );
+
+    final initialMedia = await ReceiveSharingIntent.instance.getInitialMedia();
+    if (initialMedia.isNotEmpty) {
+      _handleSharedMedia(initialMedia);
+      ReceiveSharingIntent.instance.reset();
+    }
+  }
+
+  void _handleSharedMedia(List<SharedMediaFile> media) {
+    if (!mounted || media.isEmpty || _isAddDialogOpen) return;
+
+    final sharedText = media
+        .map((item) => item.path)
+        .firstWhere((value) => value.trim().isNotEmpty, orElse: () => '');
+    if (sharedText.trim().isEmpty) return;
+
+    final sharedUrl = _extractFirstUrl(sharedText);
+    if (sharedUrl == null) return;
+
+    final sharedTitle = _extractTitle(sharedText, sharedUrl);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _isAddDialogOpen) return;
+      _showSharedLinkActionDialog(sharedUrl: sharedUrl, sharedTitle: sharedTitle);
+    });
+  }
+
+  void _showSharedLinkActionDialog({
+    required String sharedUrl,
+    required String sharedTitle,
+  }) {
+    _isAddDialogOpen = true;
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Save Shared Link'),
+          content: Text(
+            sharedTitle.isNotEmpty
+                ? '"$sharedTitle"\n\n$sharedUrl'
+                : sharedUrl,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            OutlinedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _showAddLinkDialog(prefillUrl: sharedUrl, prefillTitle: sharedTitle);
+              },
+              child: const Text('Edit Details'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                foregroundColor: Theme.of(context).colorScheme.onPrimary,
+              ),
+              onPressed: () async {
+                Navigator.pop(context);
+                await _quickSaveSharedLink(sharedUrl, sharedTitle);
+              },
+              child: const Text('Quick Save'),
+            ),
+          ],
+        );
+      },
+    ).whenComplete(() {
+      _isAddDialogOpen = false;
+    });
+  }
+
+  String? _extractFirstUrl(String text) {
+    final match = RegExp(
+      r'(https?:\/\/[^\s]+)',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (match == null) return null;
+
+    final rawUrl = match.group(0)?.trim();
+    if (rawUrl == null || rawUrl.isEmpty) return null;
+
+    return rawUrl.replaceAll(RegExp(r'[),.;]+$'), '');
+  }
+
+  String _extractTitle(String sharedText, String sharedUrl) {
+    final explicitTitle = sharedText
+        .replaceFirst(sharedUrl, '')
+        .split('\n')
+        .map((line) => line.trim())
+        .firstWhere((line) => line.isNotEmpty, orElse: () => '');
+
+    if (explicitTitle.isNotEmpty) {
+      return explicitTitle;
+    }
+
+    final uri = Uri.tryParse(sharedUrl);
+    if (uri != null && uri.host.trim().isNotEmpty) {
+      return uri.host.replaceFirst(RegExp(r'^www\.'), '');
+    }
+
+    return '';
+  }
+
+  String _normalizeUrl(String url) {
+    var input = url.trim();
+    if (input.isEmpty) return '';
+    if (!input.startsWith('http://') && !input.startsWith('https://')) {
+      input = 'https://$input';
+    }
+
+    final uri = Uri.tryParse(input);
+    if (uri == null) return input.toLowerCase();
+
+    final scheme = uri.scheme.toLowerCase().isEmpty
+        ? 'https'
+        : uri.scheme.toLowerCase();
+    var host = uri.host.toLowerCase();
+    if (host.startsWith('www.')) {
+      host = host.substring(4);
+    }
+    final path = uri.path.isEmpty
+        ? ''
+        : uri.path.replaceAll(RegExp(r'/+$'), '');
+    final query = uri.query.isEmpty ? '' : '?${uri.query}';
+    return '$scheme://$host$path$query';
+  }
+
+  Link? _findDuplicateLink(String rawUrl) {
+    final state = context.read<LinksBloc>().state;
+    if (state is! LinksSuccess) return null;
+
+    final normalizedInput = _normalizeUrl(rawUrl);
+    if (normalizedInput.isEmpty) return null;
+
+    for (final link in state.links) {
+      if (_normalizeUrl(link.url) == normalizedInput) {
+        return link;
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _confirmAddForDuplicateIfNeeded(String url) async {
+    final duplicate = _findDuplicateLink(url);
+    if (duplicate == null || !mounted) return true;
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Link Already Saved'),
+          content: Text(
+            'This URL already exists as "${duplicate.title}". What do you want to do?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'cancel'),
+              child: const Text('Cancel'),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.pop(context, 'open'),
+              child: const Text('Open Existing'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, 'save_anyway'),
+              child: const Text('Save Anyway'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (action == 'open') {
+      _openLink(duplicate.url);
+      return false;
+    }
+
+    return action == 'save_anyway';
+  }
+
+  Future<void> _quickSaveSharedLink(String sharedUrl, String sharedTitle) async {
+    final canProceed = await _confirmAddForDuplicateIfNeeded(sharedUrl);
+    if (!canProceed || !mounted) return;
+
+    final title = sharedTitle.trim().isNotEmpty
+        ? sharedTitle.trim()
+        : _extractTitle(sharedUrl, sharedUrl);
+
+    _isQuickSavePending = true;
+    context.read<AddLinkBloc>().add(
+      AddLinkRequested(
+        title: title.isEmpty ? 'Untitled Link' : title,
+        url: sharedUrl,
+        tag: 'DEFAULT',
+      ),
+    );
+    _showSnack('Saving shared link...');
+  }
+
+  void _showAddLinkDialog({String? prefillUrl, String? prefillTitle}) {
     // Clear controllers
     _titleController.clear();
     _urlController.clear();
@@ -78,6 +302,13 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
 
     // Set default tag to DEFAULT
     _tagController.text = 'DEFAULT';
+    if (prefillUrl != null && prefillUrl.trim().isNotEmpty) {
+      _urlController.text = prefillUrl.trim();
+    }
+    if (prefillTitle != null && prefillTitle.trim().isNotEmpty) {
+      _titleController.text = prefillTitle.trim();
+    }
+    _isAddDialogOpen = true;
 
     showDialog(
       context: context,
@@ -146,9 +377,13 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
               child: BlocBuilder<AddLinkBloc, AddLinkState>(
                 builder: (context, state) {
                   return ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                    ),
                     onPressed: state is AddLinkLoading
                         ? null
-                        : () {
+                        : () async {
                             if (_titleController.text.isEmpty ||
                                 _urlController.text.isEmpty ||
                                 _tagController.text.isEmpty) {
@@ -158,6 +393,11 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
                               );
                               return;
                             }
+                            final canProceed =
+                                await _confirmAddForDuplicateIfNeeded(
+                                  _urlController.text,
+                                );
+                            if (!canProceed || !context.mounted) return;
                             context.read<AddLinkBloc>().add(
                               AddLinkRequested(
                                 title: _titleController.text,
@@ -180,7 +420,9 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
           ],
         );
       },
-    );
+    ).whenComplete(() {
+      _isAddDialogOpen = false;
+    });
   }
 
   // Helper: show SnackBar
@@ -323,6 +565,11 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
                   child: BlocBuilder<EditLinkBloc, EditLinkState>(
                     builder: (context, state) {
                       return ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.primary,
+                          foregroundColor:
+                              Theme.of(context).colorScheme.onPrimary,
+                        ),
                         onPressed: state is EditLinkLoading
                             ? null
                             : () {
@@ -369,53 +616,30 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Delete Link'),
-          content: Text('Are you sure you want to delete "${link.title}"?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            BlocListener<DeleteLinkBloc, DeleteLinkState>(
-              listener: (context, state) {
-                if (state is DeleteLinkSuccess) {
-                  Navigator.pop(context);
-                  _showSnack(state.message, backgroundColor: Colors.green);
-                } else if (state is DeleteLinkError) {
-                  _showSnack(state.message, backgroundColor: Colors.red);
-                }
-              },
-              child: BlocBuilder<DeleteLinkBloc, DeleteLinkState>(
-                builder: (context, state) {
-                  return ElevatedButton(
-                    onPressed: state is DeleteLinkLoading
-                        ? null
-                        : () {
-                            context.read<DeleteLinkBloc>().add(
-                              DeleteLinkRequested(linkId: link.id),
-                            );
-                          },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                    ),
-                    child: state is DeleteLinkLoading
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                Colors.white,
-                              ),
-                            ),
-                          )
-                        : const Text('Delete'),
+        return BlocListener<DeleteLinkBloc, DeleteLinkState>(
+          listener: (context, state) {
+            if (state is DeleteLinkSuccess) {
+              Navigator.pop(context);
+              _showSnack(state.message, backgroundColor: Colors.green);
+            } else if (state is DeleteLinkError) {
+              _showSnack(state.message, backgroundColor: Colors.red);
+            }
+          },
+          child: BlocBuilder<DeleteLinkBloc, DeleteLinkState>(
+            builder: (context, state) {
+              return DeleteConfirmationDialog(
+                title: 'Delete Link',
+                message:
+                    'Are you sure you want to delete "${link.title}"?',
+                isLoading: state is DeleteLinkLoading,
+                onConfirm: () {
+                  context.read<DeleteLinkBloc>().add(
+                    DeleteLinkRequested(linkId: link.id),
                   );
                 },
-              ),
-            ),
-          ],
+              );
+            },
+          ),
         );
       },
     );
@@ -423,7 +647,18 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return BlocListener<AddLinkBloc, AddLinkState>(
+      listener: (context, state) {
+        if (!_isQuickSavePending) return;
+        if (state is AddLinkSuccess) {
+          _isQuickSavePending = false;
+          _showSnack(state.message, backgroundColor: Colors.green);
+        } else if (state is AddLinkError) {
+          _isQuickSavePending = false;
+          _showSnack(state.message, backgroundColor: Colors.red);
+        }
+      },
+      child: Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text('Links'),
@@ -470,6 +705,16 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
               if (state is TagsSuccess) {
                 tags = state.tags.map((tag) => tag.tagName).toList();
               }
+
+              if (selectedTag != 'all' && !tags.contains(selectedTag)) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  setState(() {
+                    selectedTag = 'all';
+                  });
+                });
+              }
+
               return SizedBox(
                 height: 56,
                 child: ListView(
@@ -515,45 +760,42 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
                       ),
                     ),
                     ...tags.map(
-                      (tag) => Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(tag),
-                          selected: selectedTag == tag,
-                          onSelected: (selected) {
-                            setState(() {
-                              selectedTag = tag;
-                            });
-                          },
-                          selectedColor: Theme.of(
-                            context,
-                          ).colorScheme.primaryContainer,
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.surfaceVariant,
-                          labelStyle: TextStyle(
-                            color: selectedTag == tag
-                                ? Theme.of(
-                                    context,
-                                  ).colorScheme.onPrimaryContainer
-                                : Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                            side: BorderSide(
+                      (tag) {
+                        final tagColor = TagColorUtils.colorForTag(tag);
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(tag),
+                            selected: selectedTag == tag,
+                            onSelected: (selected) {
+                              setState(() {
+                                selectedTag = tag;
+                              });
+                            },
+                            selectedColor: tagColor.withOpacity(0.22),
+                            backgroundColor: tagColor.withOpacity(0.1),
+                            labelStyle: TextStyle(
                               color: selectedTag == tag
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.transparent,
-                              width: 1.5,
+                                  ? tagColor
+                                  : Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
                             ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20),
+                              side: BorderSide(
+                                color: selectedTag == tag
+                                    ? tagColor
+                                    : tagColor.withOpacity(0.35),
+                                width: 1.5,
+                              ),
+                            ),
+                            elevation: selectedTag == tag ? 2 : 0,
+                            shadowColor: Theme.of(context).colorScheme.shadow,
                           ),
-                          elevation: selectedTag == tag ? 2 : 0,
-                          shadowColor: Theme.of(context).colorScheme.shadow,
-                        ),
-                      ),
+                        );
+                      },
                     ),
                     // Add new tag removed in read-only mode
                   ],
@@ -562,71 +804,91 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
             },
           ),
           Expanded(
-            child: BlocBuilder<LinksBloc, LinksState>(
-              builder: (context, state) {
-                if (state is LinksLoading) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (state is LinksEmpty || state is! LinksSuccess) {
-                  return EmptyState(searchText: '');
-                }
+            child: RefreshIndicator(
+              onRefresh: _refreshContent,
+              child: BlocBuilder<LinksBloc, LinksState>(
+                builder: (context, state) {
+                  if (state is LinksLoading) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(height: 180),
+                        Center(child: CircularProgressIndicator()),
+                      ],
+                    );
+                  }
 
-                var userLinks = state.links;
-                // Only filter by selected tag in read-only mode
-                if (selectedTag != 'all') {
-                  userLinks = userLinks
-                      .where((link) => link.tag == selectedTag)
-                      .toList();
-                }
+                  if (state is LinksEmpty || state is! LinksSuccess) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [SizedBox(height: 48), EmptyState(searchText: '')],
+                    );
+                  }
 
-                // Show empty state if no links for selected tag
-                if (userLinks.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  var userLinks = state.links;
+                  if (selectedTag != 'all') {
+                    userLinks = userLinks
+                        .where((link) => link.tag == selectedTag)
+                        .toList();
+                  }
+
+                  if (userLinks.isEmpty) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
                       children: [
-                        Icon(
-                          Icons.link_off,
-                          size: 64,
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'No links for this tag',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Add a new link or select a different tag',
-                          style: Theme.of(context).textTheme.bodySmall,
+                        const SizedBox(height: 140),
+                        Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.link_off,
+                                size: 64,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'No links for this tag',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Add a new link or select a different tag',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
                         ),
                       ],
+                    );
+                  }
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: ListView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      itemCount: userLinks.length,
+                      itemBuilder: (context, index) {
+                        final link = userLinks[index];
+                        return LinkCard(
+                          link: link,
+                          onOpen: () => _openLink(link.url),
+                          onEdit: () => _showEditLinkDialog(link),
+                          onDelete: () => _deleteLink(link),
+                        );
+                      },
+                      padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
                   );
-                }
-
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: ListView.builder(
-                    itemCount: userLinks.length,
-                    itemBuilder: (context, index) {
-                      final link = userLinks[index];
-                      return LinkCard(
-                        link: link,
-                        onOpen: () => _openLink(link.url),
-                        onEdit: () => _showEditLinkDialog(link),
-                        onDelete: () => _deleteLink(link),
-                      );
-                    },
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                  ),
-                );
-              },
+                },
+              ),
             ),
           ),
         ],
       ),
       // floatingActionButton disabled for now - read-only mode
-    );
+    ));
   }
 }
