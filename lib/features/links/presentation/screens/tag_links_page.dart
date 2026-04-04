@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:links/features/links/models/link.dart';
+import 'package:links/features/links/presentation/bloc/add_link/add_link_bloc.dart';
+import 'package:links/features/links/presentation/bloc/add_link/add_link_event.dart';
+import 'package:links/features/links/presentation/bloc/add_link/add_link_state.dart';
 import 'package:links/features/links/presentation/bloc/delete_link/delete_link_bloc.dart';
 import 'package:links/features/links/presentation/bloc/delete_link/delete_link_event.dart';
 import 'package:links/features/links/presentation/bloc/delete_link/delete_link_state.dart';
@@ -13,6 +16,7 @@ import 'package:links/features/links/presentation/bloc/tags/tags_bloc.dart';
 import 'package:links/features/links/presentation/bloc/tags/tags_state.dart';
 import 'package:links/features/links/widgets/delete_confirmation_dialog.dart';
 import 'package:links/features/links/widgets/link_card.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class TagLinksPage extends StatefulWidget {
@@ -66,6 +70,150 @@ class _TagLinksPageState extends State<TagLinksPage> {
     }
   }
 
+  Future<void> _shareLink(Link link) async {
+    final title = link.title.trim().isEmpty
+        ? 'Untitled Link'
+        : link.title.trim();
+    final message = '$title\n${link.url.trim()}';
+    await Share.share(message, subject: title);
+  }
+
+  void _showAddLinkDialog() {
+    _titleController.clear();
+    _urlController.clear();
+    _tagController.text = widget.tagName;
+
+    final tagsState = context.read<TagsBloc>().state;
+    List<String> availableTags = [];
+    if (tagsState is TagsSuccess) {
+      availableTags = tagsState.tags.map((tag) => tag.tagName).toList();
+    }
+    if (!availableTags.contains(widget.tagName)) {
+      availableTags = [...availableTags, widget.tagName];
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Add New Link'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: _titleController,
+                      decoration: const InputDecoration(
+                        labelText: 'Title',
+                        hintText: 'Enter link title',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _urlController,
+                      decoration: const InputDecoration(
+                        labelText: 'URL',
+                        hintText: 'https://example.com',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      initialValue: availableTags.contains(_tagController.text)
+                          ? _tagController.text
+                          : widget.tagName,
+                      items: availableTags
+                          .toSet()
+                          .toList()
+                          .map(
+                            (tag) =>
+                                DropdownMenuItem(value: tag, child: Text(tag)),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setDialogState(() {
+                            _tagController.text = value;
+                          });
+                        }
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Tag',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                BlocListener<AddLinkBloc, AddLinkState>(
+                  listener: (context, state) {
+                    if (state is AddLinkSuccess) {
+                      Navigator.pop(context);
+                      _showSnack(state.message, backgroundColor: Colors.green);
+                    } else if (state is AddLinkError) {
+                      _showSnack(state.message, backgroundColor: Colors.red);
+                    }
+                  },
+                  child: BlocBuilder<AddLinkBloc, AddLinkState>(
+                    builder: (context, state) {
+                      return ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.onPrimary,
+                        ),
+                        onPressed: state is AddLinkLoading
+                            ? null
+                            : () {
+                                if (_titleController.text.isEmpty ||
+                                    _urlController.text.isEmpty ||
+                                    _tagController.text.isEmpty) {
+                                  _showSnack(
+                                    'Please fill all fields',
+                                    backgroundColor: Colors.orange,
+                                  );
+                                  return;
+                                }
+                                context.read<AddLinkBloc>().add(
+                                  AddLinkRequested(
+                                    title: _titleController.text,
+                                    url: _urlController.text,
+                                    tag: _tagController.text,
+                                  ),
+                                );
+                              },
+                        child: state is AddLinkLoading
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('Add Link'),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showEditLinkDialog(Link link) {
     _titleController.text = link.title;
     _urlController.text = link.url;
@@ -105,7 +253,7 @@ class _TagLinksPageState extends State<TagLinksPage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: availableTags.contains(_tagController.text)
+                      initialValue: availableTags.contains(_tagController.text)
                           ? _tagController.text
                           : (availableTags.isNotEmpty
                                 ? availableTags.first
@@ -151,9 +299,12 @@ class _TagLinksPageState extends State<TagLinksPage> {
                     builder: (context, state) {
                       return ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor:
-                              Theme.of(context).colorScheme.onPrimary,
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.onPrimary,
                         ),
                         onPressed: state is EditLinkLoading
                             ? null
@@ -187,7 +338,9 @@ class _TagLinksPageState extends State<TagLinksPage> {
                             ? const SizedBox(
                                 height: 20,
                                 width: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Text('Update Link'),
                       );
@@ -244,43 +397,60 @@ class _TagLinksPageState extends State<TagLinksPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.tagName),
+      appBar: AppBar(title: Text(widget.tagName)),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showAddLinkDialog,
+        child: const Icon(Icons.add),
       ),
-      body: BlocBuilder<LinksBloc, LinksState>(
-        builder: (context, state) {
-          if (state is LinksLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final horizontalPadding = constraints.maxWidth >= 1200 ? 28.0 : 12.0;
+          final contentMaxWidth = constraints.maxWidth >= 1200
+              ? 1000.0
+              : constraints.maxWidth;
+          return Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: contentMaxWidth),
+              child: BlocBuilder<LinksBloc, LinksState>(
+                builder: (context, state) {
+                  if (state is LinksLoading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-          if (state is! LinksSuccess) {
-            return const Center(
-              child: Text('Unable to load links for this tag'),
-            );
-          }
+                  if (state is! LinksSuccess) {
+                    return const Center(
+                      child: Text('Unable to load links for this tag'),
+                    );
+                  }
 
-          final tagLinks = state.links
-              .where((link) => link.tag == widget.tagName)
-              .toList();
+                  final tagLinks = state.links
+                      .where((link) => link.tag == widget.tagName)
+                      .toList();
 
-          if (tagLinks.isEmpty) {
-            return const Center(
-              child: Text('No links in this tag'),
-            );
-          }
+                  if (tagLinks.isEmpty) {
+                    return const Center(child: Text('No links in this tag'));
+                  }
 
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            itemCount: tagLinks.length,
-            itemBuilder: (context, index) {
-              final link = tagLinks[index];
-              return LinkCard(
-                link: link,
-                onOpen: () => _openLink(link.url),
-                onEdit: () => _showEditLinkDialog(link),
-                onDelete: () => _deleteLink(link),
-              );
-            },
+                  return ListView.builder(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: horizontalPadding,
+                      vertical: 8,
+                    ),
+                    itemCount: tagLinks.length,
+                    itemBuilder: (context, index) {
+                      final link = tagLinks[index];
+                      return LinkCard(
+                        link: link,
+                        onOpen: () => _openLink(link.url),
+                        onEdit: () => _showEditLinkDialog(link),
+                        onDelete: () => _deleteLink(link),
+                        onShare: () => _shareLink(link),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
           );
         },
       ),

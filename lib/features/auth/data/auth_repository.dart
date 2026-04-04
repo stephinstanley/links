@@ -12,5 +12,7 @@ class AuthRepository {
       dataProvider.register(email, password);
 
   Future<void> signOut() => dataProvider.signOut();
+  Future<void> sendPasswordResetEmail(String email) =>
+      dataProvider.sendPasswordResetEmail(email);
   Stream<User?> get user => dataProvider.user;
 }

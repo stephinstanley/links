@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/services.dart';
 import 'package:links/features/links/models/link.dart';
 import 'package:links/features/links/presentation/bloc/add_link/add_link_bloc.dart';
 import 'package:links/features/links/presentation/bloc/add_link/add_link_event.dart';
@@ -18,6 +20,7 @@ import 'package:links/features/links/widgets/delete_confirmation_dialog.dart';
 import 'package:links/features/links/widgets/link_card.dart';
 import 'package:links/features/links/presentation/utils/tag_color_utils.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:share_plus/share_plus.dart';
 // search and edit features removed for read-only mode
 // share/copy removed in read-only mode
 import 'package:url_launcher/url_launcher.dart';
@@ -43,9 +46,9 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
   // Tag management
   String selectedTag = 'all';
   //controllers
-  TextEditingController _titleController = TextEditingController();
-  TextEditingController _urlController = TextEditingController();
-  TextEditingController _tagController = TextEditingController();
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _tagController = TextEditingController();
   StreamSubscription<List<SharedMediaFile>>? _sharedMediaSubscription;
   bool _isAddDialogOpen = false;
   bool _isQuickSavePending = false;
@@ -65,7 +68,11 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     context.read<TagsBloc>().add(const TagsFetched());
     debugPrint('LinkManagerPage: Adding LinksFetched event');
     context.read<LinksBloc>().add(const LinksFetched());
-    _setupShareHandling();
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
+      _setupShareHandling();
+    }
   }
 
   @override
@@ -79,19 +86,26 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
   }
 
   Future<void> _setupShareHandling() async {
-    _sharedMediaSubscription = ReceiveSharingIntent.instance
-        .getMediaStream()
-        .listen(
-          _handleSharedMedia,
-          onError: (Object error) {
-            debugPrint('LinkManagerPage: share stream error: $error');
-          },
-        );
+    try {
+      _sharedMediaSubscription = ReceiveSharingIntent.instance
+          .getMediaStream()
+          .listen(
+            _handleSharedMedia,
+            onError: (Object error) {
+              debugPrint('LinkManagerPage: share stream error: $error');
+            },
+          );
 
-    final initialMedia = await ReceiveSharingIntent.instance.getInitialMedia();
-    if (initialMedia.isNotEmpty) {
-      _handleSharedMedia(initialMedia);
-      ReceiveSharingIntent.instance.reset();
+      final initialMedia = await ReceiveSharingIntent.instance
+          .getInitialMedia();
+      if (initialMedia.isNotEmpty) {
+        _handleSharedMedia(initialMedia);
+        ReceiveSharingIntent.instance.reset();
+      }
+    } on MissingPluginException {
+      debugPrint(
+        'LinkManagerPage: receive_sharing_intent is not available on this platform.',
+      );
     }
   }
 
@@ -109,7 +123,10 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     final sharedTitle = _extractTitle(sharedText, sharedUrl);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _isAddDialogOpen) return;
-      _showSharedLinkActionDialog(sharedUrl: sharedUrl, sharedTitle: sharedTitle);
+      _showSharedLinkActionDialog(
+        sharedUrl: sharedUrl,
+        sharedTitle: sharedTitle,
+      );
     });
   }
 
@@ -124,9 +141,7 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
         return AlertDialog(
           title: const Text('Save Shared Link'),
           content: Text(
-            sharedTitle.isNotEmpty
-                ? '"$sharedTitle"\n\n$sharedUrl'
-                : sharedUrl,
+            sharedTitle.isNotEmpty ? '"$sharedTitle"\n\n$sharedUrl' : sharedUrl,
           ),
           actions: [
             TextButton(
@@ -136,7 +151,10 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
             OutlinedButton(
               onPressed: () {
                 Navigator.pop(context);
-                _showAddLinkDialog(prefillUrl: sharedUrl, prefillTitle: sharedTitle);
+                _showAddLinkDialog(
+                  prefillUrl: sharedUrl,
+                  prefillTitle: sharedTitle,
+                );
               },
               child: const Text('Edit Details'),
             ),
@@ -268,7 +286,10 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     return action == 'save_anyway';
   }
 
-  Future<void> _quickSaveSharedLink(String sharedUrl, String sharedTitle) async {
+  Future<void> _quickSaveSharedLink(
+    String sharedUrl,
+    String sharedTitle,
+  ) async {
     final canProceed = await _confirmAddForDuplicateIfNeeded(sharedUrl);
     if (!canProceed || !mounted) return;
 
@@ -338,7 +359,7 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: _tagController.text.isEmpty
+                  initialValue: _tagController.text.isEmpty
                       ? 'DEFAULT'
                       : _tagController.text,
                   hint: const Text('Select or enter tag'),
@@ -470,6 +491,35 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
     }
   }
 
+  Future<void> _shareLink(Link link) async {
+    final title = link.title.trim().isEmpty
+        ? 'Untitled Link'
+        : link.title.trim();
+    final message = '$title\n${link.url.trim()}';
+    await Share.share(message, subject: title);
+  }
+
+  Future<void> _importFromClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    final clipboardText = data?.text?.trim() ?? '';
+    if (clipboardText.isEmpty) {
+      _showSnack('Clipboard is empty', backgroundColor: Colors.orange);
+      return;
+    }
+
+    final sharedUrl = _extractFirstUrl(clipboardText);
+    if (sharedUrl == null) {
+      _showSnack(
+        'No valid URL found in clipboard',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    final sharedTitle = _extractTitle(clipboardText, sharedUrl);
+    _showSharedLinkActionDialog(sharedUrl: sharedUrl, sharedTitle: sharedTitle);
+  }
+
   // Sharing removed in read-only mode
 
   // Tag creation removed in read-only mode
@@ -519,7 +569,7 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: availableTags.contains(_tagController.text)
+                      initialValue: availableTags.contains(_tagController.text)
                           ? _tagController.text
                           : (availableTags.isNotEmpty
                                 ? availableTags.first
@@ -566,9 +616,12 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
                     builder: (context, state) {
                       return ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor:
-                              Theme.of(context).colorScheme.onPrimary,
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.onPrimary,
                         ),
                         onPressed: state is EditLinkLoading
                             ? null
@@ -629,8 +682,7 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
             builder: (context, state) {
               return DeleteConfirmationDialog(
                 title: 'Delete Link',
-                message:
-                    'Are you sure you want to delete "${link.title}"?',
+                message: 'Are you sure you want to delete "${link.title}"?',
                 isLoading: state is DeleteLinkLoading,
                 onConfirm: () {
                   context.read<DeleteLinkBloc>().add(
@@ -659,236 +711,274 @@ class _LinkManagerPageState extends State<LinkManagerPage> {
         }
       },
       child: Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        title: const Text('Links'),
-        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
-        elevation: 0,
-        centerTitle: false,
-        surfaceTintColor: Colors.transparent,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.label_outline),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TagManagementScreen()),
-              );
-            },
-            tooltip: 'Manage Tags',
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-
-      //creating a floating button to use the _showAddLinkDialog
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showAddLinkDialog,
-        child: const Icon(Icons.add),
-      ),
-
-      body: Column(
-        children: [
-          // Search removed in read-only mode
-          // Tag filter buttons
-          BlocBuilder<TagsBloc, TagsState>(
-            builder: (context, state) {
-              List<String> tags = [];
-              if (state is TagsSuccess) {
-                tags = state.tags.map((tag) => tag.tagName).toList();
-              }
-
-              if (selectedTag != 'all' && !tags.contains(selectedTag)) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  setState(() {
-                    selectedTag = 'all';
-                  });
-                });
-              }
-
-              return SizedBox(
-                height: 56,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        appBar: AppBar(
+          title: const Text('Links'),
+          backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+          elevation: 0,
+          centerTitle: false,
+          surfaceTintColor: Colors.transparent,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.label_outline),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const TagManagementScreen(),
                   ),
+                );
+              },
+              tooltip: 'Manage Tags',
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                );
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.content_paste_rounded),
+              tooltip: 'Paste URL',
+              onPressed: _importFromClipboard,
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: _showAddLinkDialog,
+          child: const Icon(Icons.add),
+        ),
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final horizontalPadding = constraints.maxWidth >= 1200
+                ? 28.0
+                : 12.0;
+            final contentMaxWidth = constraints.maxWidth >= 1200
+                ? 1000.0
+                : constraints.maxWidth;
+            return Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                child: Column(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: const Text('All'),
-                        selected: selectedTag == 'all',
-                        onSelected: (selected) {
-                          setState(() {
-                            selectedTag = 'all';
+                    BlocBuilder<TagsBloc, TagsState>(
+                      builder: (context, state) {
+                        List<String> tags = [];
+                        if (state is TagsSuccess) {
+                          tags = state.tags.map((tag) => tag.tagName).toList();
+                        }
+
+                        if (selectedTag != 'all' &&
+                            !tags.contains(selectedTag)) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            setState(() {
+                              selectedTag = 'all';
+                            });
                           });
-                        },
-                        selectedColor: Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer,
-                        backgroundColor: Theme.of(
-                          context,
-                        ).colorScheme.surfaceVariant,
-                        labelStyle: TextStyle(
-                          color: selectedTag == 'all'
-                              ? Theme.of(context).colorScheme.onPrimaryContainer
-                              : Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          side: BorderSide(
-                            color: selectedTag == 'all'
-                                ? Theme.of(context).colorScheme.primary
-                                : Colors.transparent,
-                            width: 1.5,
-                          ),
-                        ),
-                        elevation: selectedTag == 'all' ? 2 : 0,
-                        shadowColor: Theme.of(context).colorScheme.shadow,
-                      ),
-                    ),
-                    ...tags.map(
-                      (tag) {
-                        final tagColor = TagColorUtils.colorForTag(tag);
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(tag),
-                            selected: selectedTag == tag,
-                            onSelected: (selected) {
-                              setState(() {
-                                selectedTag = tag;
-                              });
-                            },
-                            selectedColor: tagColor.withOpacity(0.22),
-                            backgroundColor: tagColor.withOpacity(0.1),
-                            labelStyle: TextStyle(
-                              color: selectedTag == tag
-                                  ? tagColor
-                                  : Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
-                              fontWeight: FontWeight.w600,
+                        }
+
+                        return SizedBox(
+                          height: 56,
+                          child: ListView(
+                            scrollDirection: Axis.horizontal,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: horizontalPadding,
+                              vertical: 8,
                             ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                              side: BorderSide(
-                                color: selectedTag == tag
-                                    ? tagColor
-                                    : tagColor.withOpacity(0.35),
-                                width: 1.5,
-                              ),
-                            ),
-                            elevation: selectedTag == tag ? 2 : 0,
-                            shadowColor: Theme.of(context).colorScheme.shadow,
-                          ),
-                        );
-                      },
-                    ),
-                    // Add new tag removed in read-only mode
-                  ],
-                ),
-              );
-            },
-          ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _refreshContent,
-              child: BlocBuilder<LinksBloc, LinksState>(
-                builder: (context, state) {
-                  if (state is LinksLoading) {
-                    return ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [
-                        SizedBox(height: 180),
-                        Center(child: CircularProgressIndicator()),
-                      ],
-                    );
-                  }
-
-                  if (state is LinksEmpty || state is! LinksSuccess) {
-                    return ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [SizedBox(height: 48), EmptyState(searchText: '')],
-                    );
-                  }
-
-                  var userLinks = state.links;
-                  if (selectedTag != 'all') {
-                    userLinks = userLinks
-                        .where((link) => link.tag == selectedTag)
-                        .toList();
-                  }
-
-                  if (userLinks.isEmpty) {
-                    return ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: [
-                        const SizedBox(height: 140),
-                        Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(
-                                Icons.link_off,
-                                size: 64,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: const Text('All'),
+                                  selected: selectedTag == 'all',
+                                  onSelected: (selected) {
+                                    setState(() {
+                                      selectedTag = 'all';
+                                    });
+                                  },
+                                  selectedColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primaryContainer,
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.surfaceContainerHighest,
+                                  labelStyle: TextStyle(
+                                    color: selectedTag == 'all'
+                                        ? Theme.of(
+                                            context,
+                                          ).colorScheme.onPrimaryContainer
+                                        : Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                    side: BorderSide(
+                                      color: selectedTag == 'all'
+                                          ? Theme.of(
+                                              context,
+                                            ).colorScheme.primary
+                                          : Colors.transparent,
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  elevation: selectedTag == 'all' ? 2 : 0,
+                                  shadowColor: Theme.of(
+                                    context,
+                                  ).colorScheme.shadow,
+                                ),
                               ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'No links for this tag',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'Add a new link or select a different tag',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
+                              ...tags.map((tag) {
+                                final tagColor = TagColorUtils.colorForTag(tag);
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: ChoiceChip(
+                                    label: Text(tag),
+                                    selected: selectedTag == tag,
+                                    onSelected: (selected) {
+                                      setState(() {
+                                        selectedTag = tag;
+                                      });
+                                    },
+                                    selectedColor: tagColor.withOpacity(0.22),
+                                    backgroundColor: tagColor.withOpacity(0.1),
+                                    labelStyle: TextStyle(
+                                      color: selectedTag == tag
+                                          ? tagColor
+                                          : Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                      side: BorderSide(
+                                        color: selectedTag == tag
+                                            ? tagColor
+                                            : tagColor.withOpacity(0.35),
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    elevation: selectedTag == tag ? 2 : 0,
+                                    shadowColor: Theme.of(
+                                      context,
+                                    ).colorScheme.shadow,
+                                  ),
+                                );
+                              }),
                             ],
                           ),
-                        ),
-                      ],
-                    );
-                  }
-
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: ListView.builder(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      itemCount: userLinks.length,
-                      itemBuilder: (context, index) {
-                        final link = userLinks[index];
-                        return LinkCard(
-                          link: link,
-                          onOpen: () => _openLink(link.url),
-                          onEdit: () => _showEditLinkDialog(link),
-                          onDelete: () => _deleteLink(link),
                         );
                       },
-                      padding: const EdgeInsets.symmetric(vertical: 8),
                     ),
-                  );
-                },
+                    Expanded(
+                      child: RefreshIndicator(
+                        onRefresh: _refreshContent,
+                        child: BlocBuilder<LinksBloc, LinksState>(
+                          builder: (context, state) {
+                            if (state is LinksLoading) {
+                              return ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                children: const [
+                                  SizedBox(height: 180),
+                                  Center(child: CircularProgressIndicator()),
+                                ],
+                              );
+                            }
+
+                            if (state is LinksEmpty || state is! LinksSuccess) {
+                              return ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                children: const [
+                                  SizedBox(height: 48),
+                                  EmptyState(searchText: ''),
+                                ],
+                              );
+                            }
+
+                            var userLinks = state.links;
+                            if (selectedTag != 'all') {
+                              userLinks = userLinks
+                                  .where((link) => link.tag == selectedTag)
+                                  .toList();
+                            }
+
+                            if (userLinks.isEmpty) {
+                              return ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                children: [
+                                  const SizedBox(height: 140),
+                                  Center(
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.link_off,
+                                          size: 64,
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                        ),
+                                        const SizedBox(height: 16),
+                                        Text(
+                                          'No links for this tag',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.titleMedium,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'Add a new link or select a different tag',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodySmall,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              );
+                            }
+
+                            return Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: horizontalPadding,
+                              ),
+                              child: ListView.builder(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                itemCount: userLinks.length,
+                                itemBuilder: (context, index) {
+                                  final link = userLinks[index];
+                                  return LinkCard(
+                                    link: link,
+                                    onOpen: () => _openLink(link.url),
+                                    onEdit: () => _showEditLinkDialog(link),
+                                    onDelete: () => _deleteLink(link),
+                                    onShare: () => _shareLink(link),
+                                  );
+                                },
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ),
-        ],
+            );
+          },
+        ),
       ),
-      // floatingActionButton disabled for now - read-only mode
-    ));
+    );
   }
 }

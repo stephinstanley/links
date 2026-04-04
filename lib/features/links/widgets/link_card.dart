@@ -1,4 +1,7 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_link_previewer/flutter_link_previewer.dart';
 import 'package:links/features/links/models/link.dart';
 import 'package:links/features/links/presentation/utils/tag_color_utils.dart';
@@ -26,7 +29,7 @@ class LinkCard extends StatefulWidget {
 
 class _LinkCardState extends State<LinkCard> {
   static const double _avatarSize = 58;
-  bool _isHovered = false;
+  static const double _bottomActionHeight = 52;
   late Future<String?> _previewImageFuture;
   static final Map<String, String?> _previewImageCache = {};
   static final Map<String, Future<String?>> _inFlightPreviewRequests = {};
@@ -104,7 +107,9 @@ class _LinkCardState extends State<LinkCard> {
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.outlineVariant.withOpacity(0.5),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.outlineVariant.withOpacity(0.5),
                       borderRadius: BorderRadius.circular(999),
                     ),
                   ),
@@ -147,7 +152,9 @@ class _LinkCardState extends State<LinkCard> {
 
                 // Title below the buttons
                 Text(
-                  widget.link.title.isEmpty ? 'Untitled Link' : widget.link.title,
+                  widget.link.title.isEmpty
+                      ? 'Untitled Link'
+                      : widget.link.title,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w700,
                     height: 1.25,
@@ -178,8 +185,11 @@ class _LinkCardState extends State<LinkCard> {
                             if (progress == null) return child;
                             return _buildBannerShimmer(context);
                           },
-                          errorBuilder: (_, __, ___) =>
-                              _buildColorBanner(context, titleInitial, tagColor),
+                          errorBuilder: (_, __, ___) => _buildColorBanner(
+                            context,
+                            titleInitial,
+                            tagColor,
+                          ),
                         ),
                       );
                     }
@@ -208,17 +218,40 @@ class _LinkCardState extends State<LinkCard> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    IconButton(
+                      tooltip: 'Copy URL',
+                      icon: const Icon(Icons.content_copy_rounded, size: 18),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () async {
+                        await Clipboard.setData(
+                          ClipboardData(text: widget.link.url),
+                        );
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('URL copied'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),
 
                 // Tag chip
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: tagColor.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: tagColor.withOpacity(0.3), width: 0.8),
+                    border: Border.all(
+                      color: tagColor.withOpacity(0.3),
+                      width: 0.8,
+                    ),
                   ),
                   child: Text(
                     widget.link.tag,
@@ -243,9 +276,16 @@ class _LinkCardState extends State<LinkCard> {
                                 widget.onOpen?.call();
                               },
                         style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                          minimumSize: ui.Size(
+                            double.infinity,
+                            _bottomActionHeight,
+                          ),
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.onPrimary,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
@@ -254,7 +294,10 @@ class _LinkCardState extends State<LinkCard> {
                         icon: const Icon(Icons.open_in_new_rounded, size: 18),
                         label: const Text(
                           'Open Link',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
                         ),
                       ),
                     ),
@@ -271,7 +314,7 @@ class _LinkCardState extends State<LinkCard> {
                               Navigator.pop(context);
                               widget.onShare?.call();
                             },
-                      size: 52,
+                      size: _bottomActionHeight,
                     ),
                   ],
                 ),
@@ -295,140 +338,144 @@ class _LinkCardState extends State<LinkCard> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 8),
       child: MouseRegion(
-        onEnter: (_) => setState(() => _isHovered = true),
-        onExit: (_) => setState(() => _isHovered = false),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: _isHovered
-                  ? tagColor.withOpacity(0.3)
-                  : colorScheme.outlineVariant.withOpacity(0.2),
-              width: 0.5,
+        cursor: SystemMouseCursors.click,
+        child: RepaintBoundary(
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withOpacity(0.2),
+                width: 0.5,
+              ),
+              color: colorScheme.surface,
             ),
-            color: _isHovered ? tagColor.withOpacity(0.03) : colorScheme.surface,
-            boxShadow: _isHovered
-                ? [
-                    BoxShadow(
-                      color: tagColor.withOpacity(0.08),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : [],
-          ),
-          child: InkWell(
-            onTap: () => _showLinkDetailsSheet(context, tagColor, titleInitial),
-            borderRadius: BorderRadius.circular(12),
-            hoverColor: Colors.transparent,
-            splashColor: Colors.transparent,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              child: Row(
-                children: [
-                  Container(
-                    width: _avatarSize,
-                    height: _avatarSize,
-                    decoration: BoxDecoration(
-                      color: tagColor.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: tagColor.withOpacity(0.2),
-                        width: 1.2,
+            child: InkWell(
+              onTap: () =>
+                  _showLinkDetailsSheet(context, tagColor, titleInitial),
+              borderRadius: BorderRadius.circular(12),
+              splashFactory: NoSplash.splashFactory,
+              overlayColor: WidgetStateProperty.all(Colors.transparent),
+              hoverColor: Colors.transparent,
+              focusColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              splashColor: Colors.transparent,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 14,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: _avatarSize,
+                      height: _avatarSize,
+                      decoration: BoxDecoration(
+                        color: tagColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: tagColor.withOpacity(0.2),
+                          width: 1.2,
+                        ),
+                      ),
+                      child: FutureBuilder<String?>(
+                        future: _previewImageFuture,
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return _buildAvatarLoadingShimmer(context);
+                          }
+                          final imageUrl = snapshot.data;
+                          if (imageUrl != null && imageUrl.isNotEmpty) {
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(9),
+                              child: Image.network(
+                                imageUrl,
+                                width: _avatarSize,
+                                height: _avatarSize,
+                                fit: BoxFit.cover,
+                                loadingBuilder: (context, child, progress) {
+                                  if (progress == null) return child;
+                                  return _buildAvatarLoadingShimmer(context);
+                                },
+                                errorBuilder: (_, __, ___) =>
+                                    _buildFallbackAvatar(
+                                      context,
+                                      titleInitial,
+                                      tagColor,
+                                    ),
+                              ),
+                            );
+                          }
+                          return _buildFallbackAvatar(
+                            context,
+                            titleInitial,
+                            tagColor,
+                          );
+                        },
                       ),
                     ),
-                    child: FutureBuilder<String?>(
-                      future: _previewImageFuture,
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return _buildAvatarLoadingShimmer(context);
-                        }
-                        final imageUrl = snapshot.data;
-                        if (imageUrl != null && imageUrl.isNotEmpty) {
-                          return ClipRRect(
-                            borderRadius: BorderRadius.circular(9),
-                            child: Image.network(
-                              imageUrl,
-                              width: _avatarSize,
-                              height: _avatarSize,
-                              fit: BoxFit.cover,
-                              loadingBuilder: (context, child, progress) {
-                                if (progress == null) return child;
-                                return _buildAvatarLoadingShimmer(context);
-                              },
-                              errorBuilder: (_, __, ___) =>
-                                  _buildFallbackAvatar(
-                                    context,
-                                    titleInitial,
-                                    tagColor,
-                                  ),
-                            ),
-                          );
-                        }
-                        return _buildFallbackAvatar(context, titleInitial, tagColor);
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          widget.link.title.isEmpty
-                              ? 'Untitled Link'
-                              : widget.link.title,
-                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: -0.2,
-                            height: 1.3,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          widget.link.url,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w400,
-                            letterSpacing: -0.1,
-                            height: 1.3,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: tagColor.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: tagColor.withOpacity(0.3),
-                              width: 0.5,
-                            ),
-                          ),
-                          child: Text(
-                            widget.link.tag,
-                            style: Theme.of(context).textTheme.labelSmall
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            widget.link.title.isEmpty
+                                ? 'Untitled Link'
+                                : widget.link.title,
+                            style: Theme.of(context).textTheme.titleSmall
                                 ?.copyWith(
-                                  color: tagColor,
-                                  fontWeight: FontWeight.w500,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -0.2,
+                                  height: 1.3,
                                 ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 6),
+                          Text(
+                            widget.link.url,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w400,
+                                  letterSpacing: -0.1,
+                                  height: 1.3,
+                                ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: tagColor.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: tagColor.withOpacity(0.3),
+                                width: 0.5,
+                              ),
+                            ),
+                            child: Text(
+                              widget.link.tag,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(
+                                    color: tagColor,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -446,7 +493,9 @@ class _LinkCardState extends State<LinkCard> {
     Color? bgColor,
     double size = 38,
   }) {
-    final defaultBg = Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.6);
+    final defaultBg = Theme.of(
+      context,
+    ).colorScheme.surfaceContainerHighest.withOpacity(0.6);
     final defaultFg = Theme.of(context).colorScheme.onSurfaceVariant;
     return Tooltip(
       message: tooltip ?? '',
@@ -494,15 +543,23 @@ class _LinkCardState extends State<LinkCard> {
                   height: 1,
                 ),
               )
-            : Icon(Icons.label_rounded, size: 64, color: tagColor.withOpacity(0.4)),
+            : Icon(
+                Icons.label_rounded,
+                size: 64,
+                color: tagColor.withOpacity(0.4),
+              ),
       ),
     );
   }
 
   Widget _buildBannerShimmer(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseColor = isDark ? const Color(0xFF303030) : const Color(0xFFE0E0E0);
-    final highlightColor = isDark ? const Color(0xFF4A4A4A) : const Color(0xFFF2F2F2);
+    final baseColor = isDark
+        ? const Color(0xFF303030)
+        : const Color(0xFFE0E0E0);
+    final highlightColor = isDark
+        ? const Color(0xFF4A4A4A)
+        : const Color(0xFFF2F2F2);
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: Shimmer.fromColors(
@@ -528,17 +585,15 @@ class _LinkCardState extends State<LinkCard> {
                 fontWeight: FontWeight.w700,
               ),
             )
-          : Icon(
-              Icons.label_rounded,
-              color: tagColor,
-              size: 24,
-            ),
+          : Icon(Icons.label_rounded, color: tagColor, size: 24),
     );
   }
 
   Widget _buildAvatarLoadingShimmer(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseColor = isDark ? const Color(0xFF303030) : const Color(0xFFE0E0E0);
+    final baseColor = isDark
+        ? const Color(0xFF303030)
+        : const Color(0xFFE0E0E0);
     final highlightColor = isDark
         ? const Color(0xFF4A4A4A)
         : const Color(0xFFF2F2F2);

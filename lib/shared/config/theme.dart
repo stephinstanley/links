@@ -18,13 +18,11 @@ class AppTheme {
         secondary: const Color(0xFF8B5CF6),
         tertiary: const Color(0xFF06B6D4),
         surface: _surfaceDark,
-        surfaceVariant: _surfaceVariantDark,
-        background: _backgroundDark,
+        surfaceContainerHighest: _surfaceVariantDark,
         error: const Color(0xFFEF4444),
         onPrimary: Colors.white,
         onSecondary: Colors.white,
         onSurface: const Color(0xFFF1F5F9),
-        onBackground: const Color(0xFFF1F5F9),
       ),
       scaffoldBackgroundColor: _backgroundDark,
 
@@ -127,8 +125,8 @@ class AppTheme {
 
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
-          foregroundColor: MaterialStateProperty.resolveWith((states) {
-            if (states.contains(MaterialState.hovered)) {
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.hovered)) {
               return _primaryDark;
             }
             return const Color(0xFFCBD5E1);

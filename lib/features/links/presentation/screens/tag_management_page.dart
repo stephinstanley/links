@@ -243,159 +243,182 @@ class _TagManagementScreenState extends State<TagManagementScreen> {
         onPressed: _showAddTagDialog,
         child: const Icon(Icons.add),
       ),
-      body: BlocBuilder<TagsBloc, TagsState>(
-        builder: (context, state) {
-          if (state is TagsLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final horizontalPadding = constraints.maxWidth >= 1200 ? 28.0 : 12.0;
+          final contentMaxWidth = constraints.maxWidth >= 1200
+              ? 900.0
+              : constraints.maxWidth;
+          return Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: contentMaxWidth),
+              child: BlocBuilder<TagsBloc, TagsState>(
+                builder: (context, state) {
+                  if (state is TagsLoading) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
 
-          if (state is TagsEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.label_outline,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No tags yet',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Create a tag to organize your links',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            );
-          }
+                  if (state is TagsEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.label_outline,
+                            size: 64,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No tags yet',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Create a tag to organize your links',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    );
+                  }
 
-          if (state is TagsError) {
-            return Center(child: Text('Error: ${state.message}'));
-          }
+                  if (state is TagsError) {
+                    return Center(child: Text('Error: ${state.message}'));
+                  }
 
-          if (state is TagsSuccess) {
-            final tags = [...state.tags];
-            tags.sort((a, b) {
-              final aIsDefault = a.tagName.toUpperCase() == 'DEFAULT';
-              final bIsDefault = b.tagName.toUpperCase() == 'DEFAULT';
-              if (aIsDefault && !bIsDefault) return -1;
-              if (!aIsDefault && bIsDefault) return 1;
-              return a.tagName.compareTo(b.tagName);
-            });
+                  if (state is TagsSuccess) {
+                    final tags = [...state.tags];
+                    tags.sort((a, b) {
+                      final aIsDefault = a.tagName.toUpperCase() == 'DEFAULT';
+                      final bIsDefault = b.tagName.toUpperCase() == 'DEFAULT';
+                      if (aIsDefault && !bIsDefault) return -1;
+                      if (!aIsDefault && bIsDefault) return 1;
+                      return a.tagName.compareTo(b.tagName);
+                    });
 
-            if (tags.isEmpty) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.label_outline,
-                      size: 64,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'No tags yet',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Create a tag to organize your links',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            return ListView.builder(
-              itemCount: tags.length,
-              padding: const EdgeInsets.all(12),
-              itemBuilder: (context, index) {
-                final tag = tags[index];
-                final tagColor = TagColorUtils.colorForTag(tag.tagName);
-                final isDefaultTag = tag.tagName.toUpperCase() == 'DEFAULT';
-                return Card(
-                  child: ListTile(
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => TagLinksPage(tagName: tag.tagName),
+                    if (tags.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.label_outline,
+                              size: 64,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No tags yet',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Create a tag to organize your links',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
                         ),
                       );
-                    },
-                    leading: Icon(
-                      Icons.label_rounded,
-                      color: tagColor,
-                    ),
-                    title: Text(
-                      tag.tagName,
-                      style: TextStyle(
-                        color: tagColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    subtitle: Text(
-                      isDefaultTag
-                          ? 'System tag • cannot edit or delete'
-                          : 'Tap to view links',
-                    ),
-                    trailing: isDefaultTag
-                        ? Icon(
-                            Icons.lock_rounded,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          )
-                        : PopupMenuButton<String>(
-                            onSelected: (value) {
-                              if (value == 'edit') {
-                                _showEditTagDialog(tag.id, tag.tagName);
-                              } else if (value == 'delete') {
-                                _showDeleteTagDialog(tag.id, tag.tagName);
-                              }
-                            },
-                            itemBuilder: (BuildContext context) => [
-                              const PopupMenuItem<String>(
-                                value: 'edit',
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.edit_rounded, size: 18),
-                                    SizedBox(width: 12),
-                                    Text('Edit'),
-                                  ],
-                                ),
-                              ),
-                              const PopupMenuItem<String>(
-                                value: 'delete',
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      Icons.delete_rounded,
-                                      size: 18,
-                                      color: Colors.red,
-                                    ),
-                                    SizedBox(width: 12),
-                                    Text(
-                                      'Delete',
-                                      style: TextStyle(color: Colors.red),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                );
-              },
-            );
-          }
+                    }
 
-          return const SizedBox.shrink();
+                    return ListView.builder(
+                      itemCount: tags.length,
+                      padding: EdgeInsets.all(horizontalPadding),
+                      itemBuilder: (context, index) {
+                        final tag = tags[index];
+                        final tagColor = TagColorUtils.colorForTag(tag.tagName);
+                        final isDefaultTag =
+                            tag.tagName.toUpperCase() == 'DEFAULT';
+                        return Card(
+                          child: ListTile(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      TagLinksPage(tagName: tag.tagName),
+                                ),
+                              );
+                            },
+                            leading: Icon(Icons.label_rounded, color: tagColor),
+                            title: Text(
+                              tag.tagName,
+                              style: TextStyle(
+                                color: tagColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            subtitle: Text(
+                              isDefaultTag
+                                  ? 'System tag • cannot edit or delete'
+                                  : 'Tap to view links',
+                            ),
+                            trailing: isDefaultTag
+                                ? Icon(
+                                    Icons.lock_rounded,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  )
+                                : PopupMenuButton<String>(
+                                    onSelected: (value) {
+                                      if (value == 'edit') {
+                                        _showEditTagDialog(tag.id, tag.tagName);
+                                      } else if (value == 'delete') {
+                                        _showDeleteTagDialog(
+                                          tag.id,
+                                          tag.tagName,
+                                        );
+                                      }
+                                    },
+                                    itemBuilder: (BuildContext context) => [
+                                      const PopupMenuItem<String>(
+                                        value: 'edit',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.edit_rounded, size: 18),
+                                            SizedBox(width: 12),
+                                            Text('Edit'),
+                                          ],
+                                        ),
+                                      ),
+                                      const PopupMenuItem<String>(
+                                        value: 'delete',
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.delete_rounded,
+                                              size: 18,
+                                              color: Colors.red,
+                                            ),
+                                            SizedBox(width: 12),
+                                            Text(
+                                              'Delete',
+                                              style: TextStyle(
+                                                color: Colors.red,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                          ),
+                        );
+                      },
+                    );
+                  }
+
+                  return const SizedBox.shrink();
+                },
+              ),
+            ),
+          );
         },
       ),
     );

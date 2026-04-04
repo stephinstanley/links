@@ -35,5 +35,13 @@ class FirebaseAuthProvider {
     }
   }
 
+  Future<void> sendPasswordResetEmail(String email) async {
+    try {
+      await _firebaseAuth.sendPasswordResetEmail(email: email);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
   Stream<User?> get user => _firebaseAuth.authStateChanges();
 }

@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "links-f0d60"
+  },
+  "targets": {
+    "links-f0d60": {
+      "hosting": {
+        "app": [
+          "links-2026"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
